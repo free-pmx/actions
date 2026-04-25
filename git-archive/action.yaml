@@ -1,0 +1,112 @@
+name: Git repository archive
+description: >
+  Create archive from git repository, upload as artifact (default),
+  extract locally (optional)
+
+inputs:
+  git-repo:
+    description: Git repository
+    required: true
+  git-ref:
+    description: Git reference
+    required: true
+  base-name:
+    description: Prefix for filename (optional)
+    required: false
+    default: 'git-archive'
+  upload:
+    description: Upload archive as artifact (default)
+    required: false
+    default: true
+  extract:
+    description: Extract locally (optional)
+    required: false
+    default: false
+
+outputs:
+  name:
+    value: ${{ steps.archive.outputs.name }}
+  archive-path:
+    value: ${{ steps.archive.outputs.path }}
+  archive-sha256:
+    value: ${{ steps.archive.outputs.sha256 }}
+  extract-path:
+    value: ${{ steps.extract.outputs.path }}
+  git-repo:
+    value: ${{ inputs.git-repo }}
+  git-commit:
+    value: ${{ steps.archive.outputs.git-commit }}
+  git-commit-ctime:
+    value: ${{ steps.archive.outputs.git-commit-ctime }}
+
+runs:
+  using: composite
+  steps:
+
+    - id: archive
+      shell: bash
+      env:
+        GIT_REPO: ${{ inputs.git-repo }}
+        GIT_REF: ${{ inputs.git-ref }}
+        BASENAME: ${{ inputs.base-name }}
+      run: |
+        # Create bare repo, fetch commit, create archive, calculate checksum
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${GIT_REPO:?} ${GIT_REF:?}"
+
+        [[ "$BASENAME" =~ ^[a-zA-Z0-9._-]+$ ]]
+
+        GIT_DIR="$(mktemp -d --tmpdir --suffix=.git "${BASENAME}.XXXXXX")"
+
+        export GIT_ADVICE=0
+        git init --bare "$GIT_DIR"
+        export GIT_DIR
+
+        git fetch --depth=1 "$GIT_REPO" "$GIT_REF"
+        COMMIT="$(git rev-parse FETCH_HEAD)"
+        COMMIT_CT="$(git show -s --format=%ct "$COMMIT")"
+
+        ARCHIVE="$(mktemp --tmpdir --suffix=.tar "${BASENAME}-${COMMIT:0:7}.XXXXXX")"
+        git archive --format=tar "$COMMIT" > "$ARCHIVE"
+
+        read -r ARCHIVE_SHA256 _ < <(sha256sum "$ARCHIVE")
+
+        >&2 tee -a "$GITHUB_OUTPUT" << EOF
+        name=${ARCHIVE##*/}
+        path=$ARCHIVE
+        sha256=$ARCHIVE_SHA256
+        git-commit=$COMMIT
+        git-commit-ctime=$COMMIT_CT
+        EOF
+
+    - id: artifact
+      name: Upload artifact
+      if: ${{ inputs.upload == 'true' }}
+      uses: actions/upload-artifact@v7
+      with:
+        path: ${{ steps.archive.outputs.path }}
+        # single-file artifact - name = filename        
+        archive: false
+        include-hidden-files: true
+        retention-days: 1
+
+    - id: extract
+      if: ${{ inputs.extract == 'true' }}
+      shell: bash
+      env:
+        COMMIT: ${{ steps.archive.outputs.git-commit }}
+        ARCHIVE: ${{ steps.archive.outputs.path }}
+      run: |
+        # Extract to temp directory
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${COMMIT:?} ${ARCHIVE:?}"
+
+        TARGET=$(mktemp -d --tmpdir "${ARCHIVE##*/}.XXXXXX")
+
+        tar --extract --file "$ARCHIVE" --directory "$TARGET"
+
+        >&2 tee -a "$GITHUB_OUTPUT" << EOF
+        path=$TARGET
+        EOF

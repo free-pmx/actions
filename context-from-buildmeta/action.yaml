@@ -1,0 +1,83 @@
+name: Resolve build context
+description: >
+  Convert build metadata into structured JSON
+
+inputs:
+  source-dir:
+    description: Source directory
+    required: true
+
+  package:
+    description: Package filter (optional for single-package repo)
+    required: false
+
+outputs:
+  json:
+    value: ${{ steps.context.outputs.json }}
+
+runs:
+  using: composite
+  steps:
+
+    - id: acquire
+      shell: bash
+      env:
+        TARGET: ${{ inputs.source-dir }}
+        PACKAGE: ${{ inputs.package }}
+      run: |
+        # Identify .buildmeta env file in the source,
+        # infer target package name/version,
+        # ensure single file only (per package, if specified)
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${TARGET:?}"
+
+        prefix="$TARGET/${PACKAGE:+$PACKAGE}"
+        found=("$prefix"*.buildmeta)        
+        ((${#found[@]} == 1))
+
+        buildmeta_path=${found[0]}
+        test -f "$buildmeta_path"
+
+        buildmeta_filename=${buildmeta_path##*/}
+        buildmeta_barename="${buildmeta_filename%%.buildmeta}"
+
+        >&2 tee -a "$GITHUB_OUTPUT" << EOF
+        path=$buildmeta_path
+        package=${buildmeta_barename%%_*}
+        version=${buildmeta_barename#*_}
+        EOF
+
+    - id: context
+      shell: bash
+      env:
+        DEB_PACKAGE: ${{ steps.acquire.outputs.package }}
+        DEB_VERSION: ${{ steps.acquire.outputs.version }}
+        BUILDMETA_PATH: ${{ steps.acquire.outputs.path }}
+      run: |
+        # Structure build environment and package metadata as JSON
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${DEB_PACKAGE:?} ${DEB_VERSION:?} ${BUILDMETA_PATH:?}"
+
+        BUILDMETA="$(env_to_json "$BUILDMETA_PATH")"
+
+        json=$(jq -c \
+          --arg deb_package "$DEB_PACKAGE" \
+          --arg deb_version "$DEB_VERSION" \
+          '{
+            env: {
+              source_date_epoch,
+              dpkg_deb_compressor_type
+            },
+            deb: {
+              package: $deb_package,
+              version: $deb_version,
+              sha256: .deb_sha256,
+              url: .deb_url
+            }
+          }' <<< "$BUILDMETA")
+
+        >&2 tee -a "$GITHUB_OUTPUT" << EOF
+        json=$json
+        EOF

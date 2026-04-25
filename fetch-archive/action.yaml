@@ -1,0 +1,48 @@
+name: Fetch archive artifact
+description: >
+  Download archive artifact, extract it into temp directory (default)
+
+inputs:
+  name:
+    description: Artifact name
+    required: true
+  extract:
+    description: Extract locally
+    required: false
+    default: true
+
+outputs:
+  archive-path:
+    value: ${{ steps.artifact.outputs.download-path }}/${{ inputs.name }}  
+  extract-path:
+    value: ${{ steps.extract.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+
+    - id: artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.name }}
+        skip-decompress: true
+
+    - id: extract
+      if: ${{ inputs.extract == 'true' }}
+      env:
+        ARCHIVE: ${{ steps.artifact.outputs.download-path }}/${{ inputs.name }}
+      shell: bash
+      run: |
+        # Extract tree from archive into a temp dir
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${ARCHIVE:?}"
+      
+        test -f "$ARCHIVE"
+
+        TARGET=$(mktemp -d --tmpdir "${ARCHIVE##*/}.XXXXXX")
+        tar --extract --file "$ARCHIVE" --directory "$TARGET"
+
+        >&2 tee -a "$GITHUB_OUTPUT" << EOF
+        path=$TARGET
+        EOF

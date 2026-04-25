@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+import sys
+import json
+import shlex
+import re
+
+if len(sys.argv) != 2:
+    sys.exit("single arg required")
+
+kvmap = {}
+
+with open(sys.argv[1], "r") as f:
+    for i, l in enumerate(f, 1):
+        lex = shlex.shlex(l, posix=True, punctuation_chars='=')
+        lex.whitespace_split = True
+        tlist = list(lex)
+
+        if not tlist:
+            continue
+
+        if len(tlist) != 3 or tlist[1] != '=':
+            sys.exit(f"invalid assignment - line {i}")
+
+        k, _, v = tlist
+
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', k):
+            sys.exit(f"invalid identifier - line {i}")
+
+        kvmap[k.lower()] = v
+
+print(json.dumps(kvmap, separators=(',', ':')))

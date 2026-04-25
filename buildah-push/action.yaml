@@ -1,0 +1,96 @@
+name: Buildah push
+description: >
+  Push container image to registry
+
+inputs:
+  registry:
+    description: Container registry
+    required: true
+  user:
+    description: Registry username
+    required: true  
+  password:
+    description: Registry password
+    required: true
+  namespace:
+    description: Namespace in the registry
+    required: true
+  name:
+    description: Image name
+    required: true
+  tags:
+    description: Image tags (defaults to 'latest')
+    required: false
+    default: 'latest'
+
+outputs:
+  repo:
+    value: ${{ steps.push.outputs.repo }}
+  digest:
+    value: ${{ steps.push.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+
+    - id: login
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        NAMESPACE: ${{ inputs.namespace }}
+        USER: ${{ inputs.user }}
+        PASSWORD: ${{ inputs.password }}
+      run: |
+        # Login to registry, ensure masked password
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${REGISTRY:?} ${NAMESPACE:?} ${USER:?} ${PASSWORD:?}"
+
+        echo "::add-mask::$PASSWORD"
+
+        buildah login "$REGISTRY" \
+          -u "$USER" \
+          --password-stdin <<< "$PASSWORD"
+
+    - id: push
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        TAGS: ${{ inputs.tags }}
+        REPO: ${{ inputs.registry }}/${{ inputs.namespace }}/${{ inputs.name }}
+      run: |
+        # Push image (each tag) and capture digest:
+        # - split tags by space, verify at least one
+        # - sanity check digests for all pushed tags
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${NAME:?} ${TAGS:?} ${REPO:?}"
+
+        IFS=' ' read -ra tags <<< "$TAGS"
+        (( ${#tags[@]} > 0 ))
+        digests=()
+        for tag in "${tags[@]}"; do
+          digestfile="$(mktemp --tmpdir)"
+
+          buildah tag "$NAME" "$REPO:$tag"
+          buildah push --digestfile "$digestfile" "$REPO:$tag"
+
+          digests+=("$(<"$digestfile")")
+          echo "Pushed with tag: $tag"
+        done
+
+        DIGEST="${digests[0]}"
+        for d in "${digests[@]}"; do [[ $d == "$DIGEST" ]]; done
+
+        >&2 tee -a "$GITHUB_OUTPUT" << EOF
+        repo=$REPO
+        digest=$DIGEST
+        EOF
+
+    - id: logout
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: |
+        # Remove cached credentials
+        buildah logout "${REGISTRY:?}"

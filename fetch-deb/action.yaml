@@ -1,0 +1,53 @@
+name: Fetch distributed package
+description: >
+  Fetch distributed package and verify checksum and metadata
+
+inputs:
+  context:
+    description: Context JSON
+    required: true
+
+outputs:
+  deb:
+    value: ${{ steps.fetch.outputs.deb }}
+
+runs:
+  using: composite
+  steps:
+
+    - id: fetch
+      shell: bash
+      env:
+        URL: ${{ fromJson(inputs.context).deb.url }}
+        PACKAGE: ${{ fromJson(inputs.context).deb.package }}
+        VERSION: ${{ fromJson(inputs.context).deb.version }}
+      run: |
+        # Download package from URL found in the context
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${URL:?} ${PACKAGE:?} ${VERSION:?}"
+
+        OUTDIR="$(mktemp -d --tmpdir "dist-${PACKAGE}_${VERSION}.XXXXXX")"
+        deb="$OUTDIR/dist.deb"
+
+        wget --no-verbose -O "$deb" "$URL"
+
+        >&2 tee -a "$GITHUB_OUTPUT" << EOF
+        deb=$deb
+        EOF
+
+    - id: check
+      shell: bash
+      env:
+        DEB: ${{ steps.fetch.outputs.deb }}      
+        PACKAGE: ${{ fromJson(inputs.context).deb.package }}
+        VERSION: ${{ fromJson(inputs.context).deb.version }}
+      run: |
+        # Check package has been downloaded, name/version as expected
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${DEB:?} ${PACKAGE:?} ${VERSION:?}"
+        test -f "$DEB"
+
+        dist="$(dpkg-deb --show --showformat='${Package}|${Version}' "$DEB")"
+        [[ "$dist" == "$PACKAGE|$VERSION" ]]

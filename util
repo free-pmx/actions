@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -e
+trap 'echo >&2 E$? L$LINENO ${BASH_SOURCE[0]}' ERR
+
+UTILDIR="${BASH_SOURCE[0]%/*}/_util"
+
+env_to_json() {
+    "$UTILDIR/env_to_json" "$@"
+}

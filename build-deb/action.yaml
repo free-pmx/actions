@@ -1,0 +1,91 @@
+name: Build Debian package
+description: >
+  Run build inside container, check its integrity, show contents
+
+inputs:
+  build-container:
+    description: Container image to run the build in
+    required: true
+  build-type:
+    description: Script to run the package build
+    required: true
+  source-dir:
+    description: Source directory on host
+    required: true
+  context:
+    required: true
+    description: Context JSON
+
+outputs:
+  deb:
+    value: ${{ steps.build.outputs.deb }}
+
+runs:
+  using: composite
+  steps:
+
+    - id: build
+      shell: bash
+      env:
+        BUILDER: ${{ inputs.build-container }}
+        BUILD: ${{ github.action_path }}/${{ inputs.build-type }}
+        SRCDIR: ${{ inputs.source-dir }}
+        PACKAGE: ${{ fromJson(inputs.context).deb.package }}
+        VERSION: ${{ fromJson(inputs.context).deb.version }}        
+        SOURCE_DATE_EPOCH: ${{ fromJson(inputs.context).env.source_date_epoch }}
+        DPKG_DEB_COMPRESSOR_TYPE: ${{ fromJson(inputs.context).env.dpkg_deb_compressor_type }}
+      run: |
+        # Run build in a container
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${BUILDER:?} ${BUILD:?} ${SRCDIR:?} ${PACKAGE:?} ${VERSION:?}"
+        : "${SOURCE_DATE_EPOCH:?} ${DPKG_DEB_COMPRESSOR_TYPE:?}"
+
+        DEBDIR="$SRCDIR/$PACKAGE"
+        OUTDIR="$(mktemp -d --tmpdir "build-${PACKAGE}_${VERSION}.XXXXXX")"
+
+        podman run --rm \
+          --userns=keep-id \
+          --network=none \
+          -v "$DEBDIR":/mnt/src/deb:ro \
+          -v "$OUTDIR":/mnt/out \
+          -v "$BUILD":/mnt/build:ro \
+          -e SOURCE_DATE_EPOCH \
+          -e DPKG_DEB_COMPRESSOR_TYPE \
+          "$BUILDER" \
+          /mnt/build "/mnt/src/deb" "/mnt/out/build.deb"
+
+        >&2 tee -a "$GITHUB_OUTPUT" << EOF
+        deb=$OUTDIR/build.deb
+        EOF
+
+    - id: check
+      shell: bash
+      env:
+        DEB: ${{ steps.build.outputs.deb }}
+        PACKAGE: ${{ fromJson(inputs.context).deb.package }}
+        VERSION: ${{ fromJson(inputs.context).deb.version }}        
+      run: |
+        # Check package has been built, name/version as expected
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${DEB:?} ${PACKAGE:?} ${VERSION:?}"
+
+        test -f "$DEB"
+
+        built="$(dpkg-deb --show --showformat='${Package}|${Version}' "$DEB")"
+        [[ "$built" == "$PACKAGE|$VERSION" ]]
+
+    - id: contents
+      shell: bash
+      env:
+        DEB: ${{ steps.build.outputs.deb }}
+      run: |
+        # List package contents
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${DEB:?}"
+
+        echo "::group::contents"
+        dpkg-deb --contents "$DEB"
+        echo "::endgroup::"

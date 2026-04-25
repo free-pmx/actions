@@ -1,0 +1,43 @@
+name: Prune GHCR images
+description: Delete all but a few most recent images from GHCR repo
+
+inputs:
+  name:
+    required: true
+  token:
+    required: true
+
+runs:
+  using: composite
+  steps:
+
+    - id: prune
+      shell: bash
+      env:
+        OWNER: ${{ github.repository_owner }}
+        NAME: ${{ inputs.name }}
+        GH_TOKEN: ${{ inputs.token }}
+        KEEP: 3
+      run: |
+        # Fetch list of images via API,
+        # reverse sort by creation time,
+        # skip last <KEEP:count> (i.e. most recent),
+        # loop delete the list by collected IDs
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${OWNER:?} ${NAME:?} ${GH_TOKEN:?} ${KEEP:?}"
+
+        ids=$(gh api -H "Accept: application/vnd.github+json" \
+          "/users/$OWNER/packages/container/$NAME/versions" \
+        | jq -r "
+            sort_by(.created_at)
+            | reverse
+            | .[$KEEP:]
+            | .[].id
+        ")
+
+        for id in $ids; do
+          echo "Deleting $id"
+          gh api --method DELETE -H "Accept: application/vnd.github+json" \
+            "/users/$OWNER/packages/container/$NAME/versions/$id"
+        done

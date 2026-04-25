@@ -1,0 +1,30 @@
+name: APT satisfy
+description: >
+  APT satisfy set of packages on the runner under sanitised config
+
+inputs:
+  expr:
+    required: true
+    description: Expression of dependency strings to satisfy
+
+runs:
+  using: composite
+  steps:
+
+    - id: apt-satisfy
+      shell: bash
+      env:
+        OVERRIDE_APT_CONF: ${{ github.action_path }}/override.apt.conf
+        EXPR: ${{ inputs.expr }}
+      run: |
+        # Override apt.conf, run APT update and satisfy
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${OVERRIDE_APT_CONF:?} ${EXPR:?}"
+        test -f "$OVERRIDE_APT_CONF"
+
+        export APT_CONFIG="$(realpath "$OVERRIDE_APT_CONF")"
+        export DEBIAN_FRONTEND=noninteractive
+
+        sudo -E apt-get update
+        sudo -E apt-get satisfy $EXPR

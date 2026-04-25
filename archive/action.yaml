@@ -1,0 +1,88 @@
+name: Archive artifact
+description: >
+  Create archive from directory or file, upload as artifact (default)
+
+inputs:
+  path:
+    description: Path to directory or file to be archived
+    required: true
+  base-name:
+    description: Prefix for archive filename (optional)
+    required: false
+    default: 'archive'
+  mtime:
+    description: Timestamp as epoch seconds (optional)
+    required: false
+    default: ''
+  upload:
+    description: Upload archive as artifact (default)
+    required: false
+    default: 'true'
+
+outputs:
+  name:
+    value: ${{ steps.archive.outputs.name }}
+  archive-path:
+    value: ${{ steps.archive.outputs.path }}
+  archive-sha256:
+    value: ${{ steps.archive.outputs.sha256 }}
+
+runs:
+  using: composite
+  steps:
+
+    - id: archive
+      shell: bash
+      env:
+        SOURCE: ${{ inputs.path }}
+        BASENAME: ${{ inputs.base-name }}
+        MTIME: ${{ inputs.mtime }}
+      run: |
+        # Create deterministic archive (dir or file),
+        # ensure artifact-name friendly basename,
+        # calculate and return archive checksum
+
+        source "$GITHUB_ACTION_PATH/../util"
+        : "${SOURCE:?} ${BASENAME:?}"
+
+        [[ "$SOURCE" == "/" ]] || SOURCE=${SOURCE%/}
+        test -d "$SOURCE" || test -f "$SOURCE"
+        [[ "$BASENAME" =~ ^[a-zA-Z0-9._-]+$ ]]
+        MTIME="${MTIME:-$(date +%s)}"
+        [[ "$MTIME" =~ ^[0-9]+$ ]]
+
+        TAR_DIR="$SOURCE"
+        TAR_PATH="."
+
+        test -f "$SOURCE" && {
+          TAR_DIR=${SOURCE%/*}
+          [[ "$TAR_DIR" != "$SOURCE" ]] || TAR_DIR="."
+          TAR_PATH=${SOURCE##*/}
+        }          
+
+        ARCHIVE=$(mktemp --tmpdir --suffix=.tar "${BASENAME}.XXXXXX")
+
+        tar --create --file "$ARCHIVE" \
+          --format=posix --sort=name \
+          --numeric-owner --owner=0 --group=0 \
+          --mtime="@$MTIME" \
+          --directory "$TAR_DIR" \
+          "$TAR_PATH"
+
+        read -r ARCHIVE_SHA256 _ < <(sha256sum "$ARCHIVE")
+
+        >&2 tee -a "$GITHUB_OUTPUT" << EOF
+        name=${ARCHIVE##*/}
+        path=$ARCHIVE
+        sha256=$ARCHIVE_SHA256
+        EOF
+
+    - id: artifact
+      if: ${{ inputs.upload == 'true' }}
+      uses: actions/upload-artifact@v7
+      with:
+        path: ${{ steps.archive.outputs.path }}
+        # single-file artifact - name = filename
+        archive: false
+        include-hidden-files: true
+        retention-days: 1

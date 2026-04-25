@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -e
+
+SRC="${1:?source dir required}"
+OUT="${2:?output file required}"
+
+dpkg-deb --build --root-owner-group "$SRC" "$OUT"
